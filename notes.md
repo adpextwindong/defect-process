@@ -65,6 +65,91 @@ instance AllowMsgWrite SetupMsgsPhase ConsoleMsgPayload where
 - [Message Phase](src/Msg/Phase.hs)
 - [MsgsRead and MsgsWrite monad typeclass](src/Msg/Types.hs#L32)
 
+### Thinking and Messages
+
+--TODO `withMsgsPhase @type ...`
+--TODO the consuming side of these messages
+
+Here is the path from main to thinkEnemys
+
+[src/Game.hs](src/Game.hs)
+```haskell
+--Gets called in runGame in Game.hs
+gameMain :: AppEnvData -> Window -> Game -> IO ()
+gameMain appEnvData window game = do
+    (window', configs, game') <- runAppEnv appEnvData $ do
+        (win, cfgs, gm) <- updateGame window game
+  .....
+                    gm'         <- stepGame win' cfgs gm              -- <------------
+
+stepGame :: Window -> Configs -> Game -> AppEnv BaseMsgsPhase Game
+stepGame window cfgs game =
+  .....
+        withAppEnvReadData inputState' cfgs $ case _mode game of
+            WorldMode       -> worldMain game                         -- <------------
+            PauseMenuMode   -> pauseMenuMain game
+            MainMenuMode    -> mainMenuMain game
+            UnlocksMenuMode -> unlocksMenuMain game
+
+```
+
+[src/World/Main.hs](src/World/Main.hs)
+```haskell
+updateWorld :: GameMode -> World -> AppEnv BaseMsgsPhase World
+updateWorld prevGameMode world =
+  let ...
+  in do
+    ...
+    withMsgsPhase @ThinkEnemyMsgsPhase (thinkEnemyManager enemyManager)   -- <------------
+    ...
+
+
+worldMain :: Game -> AppEnv BaseMsgsPhase Game
+  ........
+                world'   <- updateWorld (_prevMode game) world            -- <------------
+```
+
+[src/Enemy/Manager.hs](src/Enemy/Manager.hs)
+```haskell
+thinkEnemyManager :: EnemyManager -> AppEnv ThinkEnemyMsgsPhase ()
+thinkEnemyManager enemyManager = sequenceA_ [thinkEnemy e | Some e <- enemies] -- <------------
+    where enemies = _enemies (enemyManager :: EnemyManager)
+```
+
+The meat and potatos.
+
+[src/Enemy.hs](src/Enemy.hs)
+```haskell
+thinkEnemy :: Enemy d -> AppEnv ThinkEnemyMsgsPhase ()
+thinkEnemy enemy
+    | isEnemyInStasis enemy = do
+        writeMsgs $ lockOnReticleDataMsgs enemy
+        writeMsgs [enemyStasisDataSoundMessage (E._pos enemy) (_stasisData enemy)]
+
+    | otherwise = do
+        writeMsgs =<< (_thinkAI enemy) enemy
+        writeMsgs $ lockOnReticleDataMsgs enemy
+        writeMsgs $ maybe [] thinkAttack (_attack enemy)
+```
+
+[src/Attack.hs](src/Attack.hs)
+```haskell
+thinkAttack :: (AllowMsgWrite p AudioMsgPayload, AllowMsgWrite p WorldMsgPayload) => Attack -> [Msg p]
+thinkAttack atk = screenshakeMsgs ++ attackSoundMessages atk
+  ...
+
+attackSoundMessages :: AllowMsgWrite p AudioMsgPayload => Attack -> [Msg p]
+attackSoundMessages atk = case _type (attackSound atk :: AttackSound) of
+    AttackPlaySound soundFilePath frameIndex ...
+    AttackPlaySounds soundFilePath frameIndices ...
+    AttackPlaySoundContinuous soundFilePath soundContinuousData -> ...
+    AttackNoSound -> []
+```
+
+## Files
+
+--Ignore this. It just makes my vim binding setup easier.
+
 src/
 src/FileCache.hs
 
@@ -668,15 +753,18 @@ src/Msg/Types.hs
 src/Msg/Payload.hs-boot
 src/Msg/Types.hs-boot
 src/Msg/Payload.hs
+
 src/Async
 src/Async/Request.hs
 src/Async/Data.hs
 src/Async/MainThread.hs
 src/Async/BackgroundThread.hs
 src/Async/Signal.hs
+
 src/Enemy
 src/Enemy/DeathEffectData
 src/Enemy/DeathEffectData/Types.hs
+
 src/Enemy/All
 src/Enemy/All/BubbleTurret
 src/Enemy/All/BubbleTurret/Sprites.hs
@@ -873,6 +961,7 @@ src/Enemy/All/Bomb/AttackDescriptions.hs
 src/Enemy/All/Bomb/AI.hs
 src/Enemy/All/Blob.hs
 src/Enemy/All/Zombie.hs
+
 src/Enemy/SpawnEffectData
 src/Enemy/SpawnEffectData/Types.hs
 src/Enemy/StasisData.hs
@@ -885,25 +974,32 @@ src/Enemy/HurtEffectData.hs
 src/Enemy/HurtEffectData
 src/Enemy/HurtEffectData/Types.hs
 src/Enemy/Types.hs-boot
+
 src/Enemy/Manager
 src/Enemy/Manager/Types.hs
+src/Enemy/Manager.hs
+
 src/Enemy/SpawnEffectData.hs
 src/Enemy/StasisData
 src/Enemy/StasisData/Types.hs
-src/Enemy/Manager.hs
 src/Enemy/All.hs
 src/Enemy/Flags.hs
 src/Enemy/Util.hs
 src/Enemy/Update.hs
+
 src/Game
 src/Game/Types.hs
 src/Game/Mode.hs
+
 src/Util
 src/Util/Time.hs
+
 src/InfoMsg
 src/InfoMsg/Manager.hs
 src/InfoMsg/Util.hs
+
 src/Window.hs
+
 src/Configs
 src/Configs/All
 src/Configs/All/PlayerWeapon
@@ -966,6 +1062,7 @@ src/Configs/All/PlayerGun/ShardGun.hs
 src/Configs/All/PlayerGun/RicochetGun.hs
 src/Configs/All/PlayerGun/SpikeGun.hs
 src/Configs/All/EnemyLockOn.hs
+
 src/Util.hs
 src/FileCache
 src/FileCache/Types.hs
